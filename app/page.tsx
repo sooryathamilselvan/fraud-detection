@@ -73,7 +73,11 @@ export default function FraudDetectionPage() {
     setIsAnalyzing(true)
 
     try {
-      // Simulate API call to Gemini
+      const apiKey = process.env.NEXT_PUBLIC_GEMINI_API_KEY
+      if (!apiKey) {
+        throw new Error("Gemini API key not configured. Please add NEXT_PUBLIC_GEMINI_API_KEY to your .env.local file.")
+      }
+
       const prompt = `Analyze this credit card transaction for fraud detection:
       
 Transaction Details:
@@ -89,32 +93,82 @@ Transaction Details:
 - Time Since Last Transaction: ${formData.timeSinceLastTransaction}
 - Additional Notes: ${formData.additionalNotes}
 
-Please analyze this transaction and determine if it's valid or fraudulent. Provide a confidence score (0-100) and reasoning.`
+Please analyze this transaction and determine if it's "valid" or "fraudulent". 
+Provide your response in this exact JSON format:
+{
+  "status": "valid" or "fraudulent",
+  "confidence": number between 0-100,
+  "reasoning": "detailed explanation of your analysis"
+}`
 
       console.log("Prompt for Gemini API:", prompt)
       console.log("Transaction Data JSON:", JSON.stringify(formData, null, 2))
 
-      // Simulate response (replace with actual Gemini API call)
-      await new Promise((resolve) => setTimeout(resolve, 2000))
+      const response = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=${apiKey}`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            contents: [
+              {
+                parts: [
+                  {
+                    text: prompt,
+                  },
+                ],
+              },
+            ],
+          }),
+        },
+      )
 
-      // Mock response - replace with actual API response
-      const mockResult = {
-        status: Math.random() > 0.5 ? "valid" : ("fraudulent" as "valid" | "fraudulent"),
-        confidence: Math.floor(Math.random() * 30) + 70,
-        reasoning:
-          "Transaction patterns match typical user behavior. Location and timing are consistent with previous transactions.",
+      if (!response.ok) {
+        throw new Error(`API request failed: ${response.status} ${response.statusText}`)
       }
 
-      setResult(mockResult)
+      const data = await response.json()
+
+      const geminiResponse = data.candidates?.[0]?.content?.parts?.[0]?.text
+      if (!geminiResponse) {
+        throw new Error("Invalid response from Gemini API")
+      }
+
+      let analysisResult
+      try {
+        // Extract JSON from response (in case there's extra text)
+        const jsonMatch = geminiResponse.match(/\{[\s\S]*\}/)
+        if (jsonMatch) {
+          analysisResult = JSON.parse(jsonMatch[0])
+        } else {
+          // Fallback: parse the entire response as JSON
+          analysisResult = JSON.parse(geminiResponse)
+        }
+      } catch (parseError) {
+        analysisResult = {
+          status: geminiResponse.toLowerCase().includes("fraudulent") ? "fraudulent" : "valid",
+          confidence: 85,
+          reasoning: geminiResponse,
+        }
+      }
+
+      setResult({
+        status: analysisResult.status,
+        confidence: analysisResult.confidence,
+        reasoning: analysisResult.reasoning,
+      })
 
       toast({
         title: "Analysis Complete",
-        description: `Transaction marked as ${mockResult.status} with ${mockResult.confidence}% confidence`,
+        description: `Transaction marked as ${analysisResult.status} with ${analysisResult.confidence}% confidence`,
       })
     } catch (error) {
+      console.error("Analysis error:", error)
       toast({
         title: "Analysis Failed",
-        description: "There was an error analyzing the transaction",
+        description: error instanceof Error ? error.message : "There was an error analyzing the transaction",
         variant: "destructive",
       })
     } finally {
